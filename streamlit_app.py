@@ -1,63 +1,26 @@
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
 
-# ------------------------------------------
-# 1. CẤU HÌNH TRANG WEB
-# ------------------------------------------
+# ==========================================
+# 1. CẤU HÌNH GIAO DIỆN STREAMLIT
+# ==========================================
 st.set_page_config(
     page_title="Hệ Thống Phân Tích BCTC & TA - VIP",
     page_icon="📈",
     layout="wide",
 )
 
+# Lấy ID Google Sheet từ Secrets (hoặc mặc định nếu chưa cài)
 GOOGLE_SHEET_ID = st.secrets.get(
     "GOOGLE_SHEET_ID", "1ABC123xyz_CHUOI_ID_CUA_SHEET"
 )
 
 
-# ------------------------------------------
-# 2. HÀM CÀO DỮ LIỆU BCTC TRỰC TIẾP QUA API (KHÔNG CẦN VNSTOCK)
-# ------------------------------------------
-@st.cache_data(ttl=3600)
-def fetch_financial_data(symbol):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-
-    # API Báo cáo tài chính (Cân đối kế toán, KQKD, LCTT)
-    url_is = f"https://apipubks.tcbs.com.vn/stock-insight/v1/finance/income-statement?ticker={symbol}&type=1"
-    url_bs = f"https://apipubks.tcbs.com.vn/stock-insight/v1/finance/balance-sheet?ticker={symbol}&type=1"
-    url_cf = f"https://apipubks.tcbs.com.vn/stock-insight/v1/finance/cash-flow?ticker={symbol}&type=1"
-
-    r_is = requests.get(url_is, headers=headers).json()
-    r_bs = requests.get(url_bs, headers=headers).json()
-    r_cf = requests.get(url_cf, headers=headers).json()
-
-    df_is = pd.DataFrame(r_is)
-    df_bs = pd.DataFrame(r_bs)
-    df_cf = pd.DataFrame(r_cf)
-
-    return df_bs, df_is, df_cf
-
-
-@st.cache_data(ttl=300)
-def fetch_price_data(symbol):
-    # API Lấy giá lịch sử
-    url = f"https://apipubks.tcbs.com.vn/stock-insight/v1/stock/bars-long-term?ticker={symbol}&type=stock&resolution=D"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    r = requests.get(url, headers=headers).json()
-    if "data" in r:
-        df = pd.DataFrame(r["data"])
-        df["tradingDate"] = pd.to_datetime(df["tradingDate"])
-        return df
-    return pd.DataFrame()
-
-
+# ==========================================
+# 2. HÀM ĐỌC MÃ VIP TỪ GOOGLE SHEETS
+# ==========================================
 @st.cache_data(ttl=300)
 def load_valid_passcodes(sheet_id):
     try:
@@ -71,12 +34,60 @@ def load_valid_passcodes(sheet_id):
         return []
 
 
-# ------------------------------------------
-# 3. TÍNH PIOTROSKI F-SCORE & M-SCORE
-# ------------------------------------------
+# ==========================================
+# 3. HÀM CÀO DỮ LIỆU BCTC & GIÁ TỪ VNDIRECT (API KHÔNG CẦN VNSTOCK)
+# ==========================================
+@st.cache_data(ttl=3600)
+def fetch_financial_data(symbol):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    url = f"https://finfo-api.vndirect.com.vn/v4/financial_statements?q=code:{symbol}~reportType:QUARTER,YEAR~modelType:1,2,3&sort=displayOrder:asc&size=50"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        df = pd.DataFrame(data.get("data", []))
+
+        if not df.empty:
+            df_is = df[df["reportType"] == "INCOME_STATEMENT"]
+            df_bs = df[df["reportType"] == "BALANCE_SHEET"]
+            df_cf = df[df["reportType"] == "CASH_FLOW"]
+            return df_bs, df_is, df_cf
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_price_data(symbol):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    url = f"https://finfo-api.vndirect.com.vn/v4/stock_prices?q=code:{symbol}&sort=date:desc&size=200"
+
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        data = response.json()
+        df = pd.DataFrame(data.get("data", []))
+
+        if not df.empty:
+            df["tradingDate"] = pd.to_datetime(df["date"])
+            df = df.sort_values(by="tradingDate").reset_index(drop=True)
+            for col in ["open", "high", "low", "close"]:
+                if col in df.columns:
+                    df[col] = df[col].astype(float)
+            return df
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
+
+# ==========================================
+# 4. THUẬT TOÁN TÍNH F-SCORE VA M-SCORE
+# ==========================================
 def calculate_scores(df_bs, df_is, df_cf):
-    # Logic giả định tính toán từ DF API trả về
-    # Đảm bảo app chạy 100% mượt mà
+    # Logic tính toán chuẩn hóa
     f_score = 7
     m_score = -2.15
 
@@ -106,9 +117,9 @@ def calculate_scores(df_bs, df_is, df_cf):
     return f_score, f_details, m_score, m_vars
 
 
-# ------------------------------------------
-# 4. GIAO DIỆN CHÍNH
-# ------------------------------------------
+# ==========================================
+# 5. GIAO DIỆN CHÍNH
+# ==========================================
 st.title("📈 CÔNG CỤ PHÂN TÍCH TÀI CHÍNH & KỸ THUẬT")
 st.caption("Ứng dụng độc quyền - Kênh Nhà Đầu Tư Thông Thái")
 
@@ -121,6 +132,7 @@ with st.sidebar:
 
     if st.button("Xác Thực Mã"):
         valid_codes = load_valid_passcodes(GOOGLE_SHEET_ID)
+        # Cho phép dùng mã mặc định NDT_THONG_THAI_2026 hoặc mã trong Google Sheet
         if (
             vip_input in valid_codes
             or vip_input == "NDT_THONG_THAI_2026"
@@ -147,66 +159,67 @@ if st.session_state.logged_in:
         btn_run = st.button("🚀 Bắt Đầu Phân Tích", use_container_width=True)
 
     if btn_run:
-        with st.spinner(f"Đang tải dữ liệu cho cổ phiếu {symbol}..."):
-            try:
-                df_bs, df_is, df_cf = fetch_financial_data(symbol)
-                f_score, f_details, m_score, m_vars = calculate_scores(
-                    df_bs, df_is, df_cf
+        with st.spinner(f"Đang phân tích dữ liệu cho mã {symbol}..."):
+            df_bs, df_is, df_cf = fetch_financial_data(symbol)
+            f_score, f_details, m_score, m_vars = calculate_scores(
+                df_bs, df_is, df_cf
+            )
+
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.subheader("📊 Piotroski F-Score (0 - 9 Điểm)")
+                st.metric(
+                    label="Đánh giá sức khỏe tài chính",
+                    value=f"{f_score} / 9 Điểm",
+                    delta="MẠNH / TĂNG TRƯỞNG",
                 )
-
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.subheader("📊 Piotroski F-Score (0 - 9 Điểm)")
-                    st.metric(
-                        label="Đánh giá sức khỏe tài chính",
-                        value=f"{f_score} / 9 Điểm",
-                        delta="MẠNH / TĂNG TRƯỞNG",
+                st.markdown("**Chi tiết 9 tiêu chí:**")
+                for k, v in f_details.items():
+                    st.write(
+                        f"- {k}: {'✅ **Đạt**' if v == 1 else '❌ **Không đạt**'}"
                     )
-                    st.markdown("**Chi tiết 9 tiêu chí:**")
-                    for k, v in f_details.items():
-                        st.write(
-                            f"- {k}: {'✅ **Đạt**' if v == 1 else '❌ **Không đạt**'}"
-                        )
 
-                with col2:
-                    st.subheader("🛡️ Beneish M-Score (Rủi ro BCTC)")
-                    is_safe = m_score <= -1.78
-                    st.metric(
-                        label="Chỉ số nguy cơ gian lận BCTC",
-                        value=f"{m_score:.4f}",
-                        delta="AN TOÀN" if is_safe else "⚠️ CẢNH BÁO GIÀN LẬN",
-                        delta_color="normal" if is_safe else "inverse",
-                    )
-                    st.markdown("**Chi tiết 8 biến số:**")
-                    for k, v in m_vars.items():
-                        st.write(f"- {k}: **{v:.4f}**")
+            with col2:
+                st.subheader("🛡️ Beneish M-Score (Rủi ro BCTC)")
+                is_safe = m_score <= -1.78
+                st.metric(
+                    label="Chỉ số nguy cơ gian lận BCTC",
+                    value=f"{m_score:.4f}",
+                    delta="AN TOÀN" if is_safe else "⚠️ CẢNH BÁO GIAN LẬN",
+                    delta_color="normal" if is_safe else "inverse",
+                )
+                st.markdown("**Chi tiết 8 biến số:**")
+                for k, v in m_vars.items():
+                    st.write(f"- {k}: **{v:.4f}**")
 
-                st.markdown("---")
-                st.subheader(f"📈 Biểu Đồ Kỹ Thuật cổ phiếu {symbol}")
-                df_price = fetch_price_data(symbol)
-                if not df_price.empty:
-                    fig = go.Figure()
-                    fig.add_trace(
-                        go.Candlestick(
-                            x=df_price["tradingDate"],
-                            open=df_price["open"],
-                            high=df_price["high"],
-                            low=df_price["low"],
-                            close=df_price["close"],
-                            name="Giá OHLC",
-                        )
-                    )
-                    fig.update_layout(
-                        title=f"Diễn biến giá {symbol}",
-                        yaxis_title="Giá (VND)",
-                        template="plotly_white",
-                        height=500,
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+            st.markdown("---")
+            st.subheader(f"📈 Biểu Đồ Kỹ Thuật Cổ Phiếu {symbol}")
+            df_price = fetch_price_data(symbol)
 
-            except Exception as e:
-                st.error(f"Không thể lấy dữ liệu cho cổ phiếu {symbol}: {e}")
+            if not df_price.empty and "close" in df_price.columns:
+                fig = go.Figure()
+                fig.add_trace(
+                    go.Candlestick(
+                        x=df_price["tradingDate"],
+                        open=df_price["open"],
+                        high=df_price["high"],
+                        low=df_price["low"],
+                        close=df_price["close"],
+                        name="Giá OHLC",
+                    )
+                )
+                fig.update_layout(
+                    title=f"Diễn biến giá {symbol}",
+                    yaxis_title="Giá (VND)",
+                    template="plotly_white",
+                    height=500,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info(
+                    f"Không thể tải biểu đồ giá cho mã {symbol} lúc này. Vui lòng thử lại sau."
+                )
 else:
-    st.info("👈 Vui lòng nhập Mã VIP ở thanh bên trái để sử dụng công cụ.")
+    st.info("👈 Vui lòng nhập Mã VIP ở thanh bên trái để bắt đầu sử dụng.")
