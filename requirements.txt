@@ -1,6 +1,5 @@
 streamlit
 vnstock3
 pandas
-numpy
 plotly
 requests
