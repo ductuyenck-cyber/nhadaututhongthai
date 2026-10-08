@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from vnstock3 import FinancialReport, stock_historical_data
+from vnstock import FinancialReport, stock_historical_data
 
 # ------------------------------------------
 # 1. CẤU HÌNH TRANG WEB
