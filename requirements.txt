@@ -1,5 +1,6 @@
 streamlit
-vnstock3
-pandas
+vnstock>=0.2.9
+pandas<2.2.0
+numpy<2.0.0
 plotly
 requests
